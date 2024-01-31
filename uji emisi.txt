@@ -1,0 +1,255 @@
+//Include the library
+#include <MQUnifiedsensor.h>
+#include <LiquidCrystal_I2C.h>
+#include <Wire.h>
+//deklarasi pin sensor
+#define         Pin1                    25  //pin sensor MQ-135
+#define         Pin2                    27  //pin sensor MQ-2
+#define         Pin3                    26  //pin sensor MQ-7
+//Makro Terkait Perangkat Lunak
+#define         placa                   "ESP32 DEV Module"
+#define         Type1                   "MQ-135" //MQ135
+#define         Type2                   "MQ-2" //MQ2
+#define         Type3                   "MQ-7" //MQ7
+#define         Voltage_Resolution      5
+#define         ADC_Bit_Resolution      12 // For arduino UNO/MEGA/NANO
+#define         RatioMQ135CleanAir      3.6//RS / R0 = 3.6 ppm  
+#define         RatioMQ2CleanAir        9.83 //RS / R0 = 9.83 ppm 
+#define         RatioMQ7CleanAir        27.5 //RS / R0 = 27.5 ppm 
+
+LiquidCrystal_I2C lcd(0x27, 20, 4);
+const int pinRestart = 14;    // Pin untuk tombol restart
+const int pinPause = 4;    // Pin untuk tombol pause
+bool lcdClearRequested = false;
+bool isPause = false;  // Status awal tombol (off)
+
+/*****************************Globals***********************************************/
+MQUnifiedsensor MQ135(placa, Voltage_Resolution, ADC_Bit_Resolution, Pin1, Type1);
+MQUnifiedsensor MQ2(placa, Voltage_Resolution, ADC_Bit_Resolution, Pin2, Type2);
+MQUnifiedsensor MQ7(placa, Voltage_Resolution, ADC_Bit_Resolution, Pin3, Type3);
+unsigned long oldTime = 0;
+/*****************************Globals***********************************************/
+ 
+void setup() {
+  //Init komunikasi port serial - untuk men-debug library
+  Serial.begin(115200); //Init serial port
+  pinMode(pinRestart, INPUT_PULLUP);  // Menggunakan pull-up resistor internal
+  pinMode(pinPause, INPUT_PULLUP);  // Menggunakan pull-up resistor internal
+
+  lcd.begin();
+  lcd.backlight();
+  lcd.setCursor(4, 1);
+  lcd.print("ALAT UJI EMISI");
+  
+  delay(2000);
+  
+  //model matematis untuk menghitung konsentrasi PPM dan nilai konstanta
+  MQ135.setRegressionMethod(1); //_PPM =  a*ratio^b
+  MQ135.setA(110.47); MQ135.setB(-2.862); // Konfigurasikan persamaan untuk menghitung konsentrasi CO2
+  MQ2.setRegressionMethod(1); //_PPM =  a*ratio^b
+  MQ2.setA(658.71); MQ2.setB(-2.168); // Konfigurasikan persamaan untuk menghitung konsentrasi HC
+  MQ7.setRegressionMethod(1); //_PPM =  a*ratio^b
+  MQ7.setA(99.042); MQ7.setB(-1.518); // Konfigurasikan persamaan untuk menghitung konsentrasi CO
+  
+  /************************************************************************************/ 
+  // Acknowledgements: https://jayconsystems.com/blog/understanding-a-gas-sensor
+  
+  Serial.print("Calibrating please wait.");
+  float calcR0 = 0;
+  for(int i = 1; i<=10; i ++)
+  {
+    MQ135.update(); // Update data, arduino akan membaca input dari pin analog
+    calcR0 += MQ135.calibrate(RatioMQ135CleanAir);
+    Serial.print(".");
+  }
+  MQ135.setR0(calcR0/10);
+
+  for(int i = 1; i<=10; i ++)
+  {
+    MQ2.update(); // Update data, arduino akan membaca input dari pin analog
+    calcR0 += MQ2.calibrate(RatioMQ2CleanAir);
+    Serial.print(".");
+  }
+  MQ2.setR0(calcR0/10);
+
+  for(int i = 1; i<=10; i ++)
+  {
+    MQ7.update(); // Update data, the arduino will read the voltage from the analog pin
+    calcR0 += MQ7.calibrate(RatioMQ7CleanAir);
+    Serial.print(".");
+  }
+  MQ7.setR0(calcR0/10);
+  Serial.println("  done!.");
+
+  /*if(isinf(calcR0)) {
+    Serial.println("Warning: Conection issue, R0 is infinite (Open circuit detected) please check your wiring and supply"); 
+    while(1);
+    }
+  if(calcR0 == 0){
+    Serial.println("Warning: Conection issue found, R0 is zero (Analog pin shorts to ground) please check your wiring and supply"); 
+    while(1);
+    }
+     */ 
+}
+
+void loop() {
+  MQ135.update(); // Update data, the arduino will read the voltage from the analog pin
+  float CO2 = MQ135.readSensor();
+
+  MQ2.update(); // Update data, the arduino will read the voltage from the analog pin
+  float HC = MQ2.readSensor()/500;
+  float hasil = HC;
+  MQ7.update(); // Update data, the arduino will read the voltage from the analog pin
+  float CO = MQ7.readSensor();
+
+  //===============================================================================================
+  
+  //==============================================================================================
+  // Baca status tombol
+  int buttonState = digitalRead(pinPause);
+
+    // Periksa apakah tombol ditekan
+    if (buttonState == LOW) {
+      // Tombol ditekan, ubah status isPaused
+      isPause = !isPause;
+
+      if (isPause) {
+        //lcd.clear();
+        // Program di-pause, lakukan tindakan yang sesuai
+        lcd.clear();
+        lcd.setCursor(0, 1);
+        lcd.print("CO2");
+        lcd.setCursor(4, 1);
+        lcd.print(":");
+        lcd.setCursor(5, 1);
+        lcd.print(CO2);
+        lcd.setCursor(16, 1);
+        lcd.print("PPM");
+
+        lcd.setCursor(0, 2);
+        lcd.print("HC");
+        lcd.setCursor(4, 2);
+        lcd.print(":");
+        lcd.setCursor(5, 2);
+        lcd.print(hasil);
+        lcd.setCursor(16, 2);
+        lcd.print("PPM");
+
+        lcd.setCursor(0, 3);
+        lcd.print("CO");
+        lcd.setCursor(4, 3);
+        lcd.print(":");
+        lcd.setCursor(5, 3);
+        lcd.print(CO);
+        lcd.setCursor(16, 3);
+        lcd.print("PPM");
+
+        Serial.print("MQ-135: ");
+        Serial.print(CO2); // Sensor will read PPM concentration using the model, a and b values set previously or from the setup
+        Serial.println(" PPM");
+
+        Serial.print("MQ-2: ");
+        Serial.print(HC); // Sensor will read PPM concentration using the model, a and b values set previously or from the setup
+        Serial.println(" PPM");
+
+        Serial.print("MQ-7: ");
+        Serial.print(CO); // Sensor will read PPM concentration using the model, a and b values set previously or from the setup
+        Serial.println(" PPM");
+      } 
+      else {
+        // Program dilanjutkan, ketika button di tekan
+        //lcd.clear();
+        lcd.print("");
+      }
+
+      // Tunggu hingga tombol dilepas untuk menghindari multiple trigger
+      while (digitalRead(pinPause) == LOW) {
+        delay(10);
+      }
+    }
+
+    // Baca status tombol membersihkan LCD
+  int clearLcdButtonState = digitalRead(pinRestart);
+
+  // Memeriksa apakah tombol membersihkan LCD ditekan
+  if (clearLcdButtonState == LOW) {
+    // Tombol membersihkan LCD ditekan, set flag untuk membersihkan LCD
+    lcdClearRequested = true;
+  }
+
+  // Jika flag membersihkan LCD diatur, lakukan membersihkan LCD
+  if (lcdClearRequested) {
+    clearLcd();
+    lcdClearRequested = false;  // Reset flag setelah membersihkan LCD
+  }
+
+    // Jika tidak di-pause, jalankan logika program normal
+  if (!isPause) {
+    displaySensorValues();
+    
+    Serial.print("MQ-135: ");
+    Serial.print(CO2); // Sensor will read PPM concentration using the model, a and b values set previously or from the setup
+    Serial.println(" PPM");
+
+    Serial.print("MQ-2: ");
+    Serial.print(hasil); // Sensor will read PPM concentration using the model, a and b values set previously or from the setup
+    Serial.println(" PPM");
+
+    Serial.print("MQ-7: ");
+    Serial.print(CO); // Sensor will read PPM concentration using the model, a and b values set previously or from the setup
+    Serial.println(" PPM");
+    delay(100); //Sampling frequency
+    //lcd.clear();
+  }
+}
+
+void displaySensorValues(){
+
+  MQ135.update(); // Update data, the arduino will read the voltage from the analog pin
+  float CO2 = MQ135.readSensor();
+
+  MQ2.update(); // Update data, the arduino will read the voltage from the analog pin
+  float HC = MQ2.readSensor()/500;
+  float hasil = HC;
+
+  MQ7.update(); // Update data, the arduino will read the voltage from the analog pin
+  float CO = MQ7.readSensor();
+
+  lcd.clear();
+  lcd.setCursor(5, 0);
+  lcd.print("HASIL UJI");
+
+  lcd.setCursor(0, 1);
+  lcd.print("CO2");
+  lcd.setCursor(4, 1);
+  lcd.print(":");
+  lcd.setCursor(5, 1);
+  lcd.print(CO2);
+  lcd.setCursor(16, 1);
+  lcd.print("PPM");
+
+  lcd.setCursor(0, 2);
+  lcd.print("HC");
+  lcd.setCursor(4, 2);
+  lcd.print(":");
+  lcd.setCursor(5, 2);
+  lcd.print(hasil);
+  lcd.setCursor(16, 2);
+  lcd.print("PPM");
+
+  lcd.setCursor(0, 3);
+  lcd.print("CO");
+  lcd.setCursor(4, 3);
+  lcd.print(":");
+  lcd.setCursor(5, 3);
+  lcd.print(CO);
+  lcd.setCursor(16, 3);
+  lcd.print("PPM");
+}
+  // Sisanya dari kode Anda di sini
+void clearLcd() {
+  // Logika untuk membersihkan tampilan LCD
+  // Implementasikan sesuai dengan library LCD yang Anda gunakan
+  // Misalnya, jika menggunakan LiquidCrystal_I2C:
+ESP.restart();  // Restart ESP32
+}
